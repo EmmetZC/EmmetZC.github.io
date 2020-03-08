@@ -638,6 +638,37 @@
   overflow: visible;
   position: static;
   width: auto;
+}
+
+.svg-inline--fa .fa-primary {
+  fill: var(--fa-primary-color, currentColor);
+  opacity: 1;
+  opacity: var(--fa-primary-opacity, 1);
+}
+
+.svg-inline--fa .fa-secondary {
+  fill: var(--fa-secondary-color, currentColor);
+  opacity: 0.4;
+  opacity: var(--fa-secondary-opacity, 0.4);
+}
+
+.svg-inline--fa.fa-swap-opacity .fa-primary {
+  opacity: 0.4;
+  opacity: var(--fa-secondary-opacity, 0.4);
+}
+
+.svg-inline--fa.fa-swap-opacity .fa-secondary {
+  opacity: 1;
+  opacity: var(--fa-primary-opacity, 1);
+}
+
+.svg-inline--fa mask .fa-primary,
+.svg-inline--fa mask .fa-secondary {
+  fill: black;
+}
+
+.fad.fa-inverse {
+  color: #fff;
 }</style>
 
 <p>鲜艳的用色、哥特式的画风、漫画中特有的对话与拟声气泡，当<em>The Witness</em>一开始把这些展现给观众面前时，一定会让你想到另一部在 18 年上映并荣获 19 年奥斯卡最佳动画长片大奖的动画电影——<em>Spider-Man: Into the Spider-Verse(蜘蛛侠：平行宇宙)</em>。那部电影用独特的画风和动感十足的表现手法给大家上了一堂生动的漫画电影制作课。而本集可以说很好地学习和继承了这种手法，在画面表现上也非常出色。<a id="more"></a></p>
@@ -818,10 +849,10 @@
   if (CONFIG.page.isPost) {
     function addCount(Counter) {
       var visitors = document.querySelector('.leancloud_visitors');
-      var url = decodeURI(visitors.getAttribute('id'));
+      var url = decodeURI(visitors.id);
       var title = visitors.dataset.flagTitle;
 
-      Counter('get', `/classes/Counter?where=${JSON.stringify({ url })}`)
+      Counter('get', '/classes/Counter?where=' + encodeURIComponent(JSON.stringify({ url })))
         .then(response => response.json())
         .then(({ results }) => {
           if (results.length > 0) {
@@ -848,27 +879,15 @@
     function showTime(Counter) {
       var visitors = document.querySelectorAll('.leancloud_visitors');
       var entries = [...visitors].map(element => {
-        return decodeURI(element.getAttribute('id'));
+        return decodeURI(element.id);
       });
 
-      Counter('get', `/classes/Counter?where=${JSON.stringify({ url: { '$in': entries } })}`)
+      Counter('get', '/classes/Counter?where=' + encodeURIComponent(JSON.stringify({ url: { '$in': entries } })))
         .then(response => response.json())
         .then(({ results }) => {
-          if (results.length === 0) {
-            document.querySelectorAll('.leancloud_visitors .leancloud-visitors-count').forEach(element => {
-              element.innerText = 0;
-            });
-            return;
-          }
-          for (let item of results) {
-            let { url, time } = item;
-            leancloudSelector(url).innerText = time;
-          }
           for (let url of entries) {
-            var element = leancloudSelector(url);
-            if (element.innerText == '') {
-              element.innerText = 0;
-            }
+            let target = results.find(item => item.url === url);
+            leancloudSelector(url).innerText = target ? target.time : 0;
           }
         })
         .catch(error => {

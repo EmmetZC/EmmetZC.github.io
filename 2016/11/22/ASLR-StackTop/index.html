@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=2">
+<meta name="theme-color" content="#222">
+<meta name="generator" content="Hexo 4.2.0">
+  <link rel="apple-touch-icon" sizes="180x180" href="/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon.ico">
+  <link rel="icon" type="image/png" sizes="16x16" href="/favicon.ico">
+  <link rel="mask-icon" href="/favicon.ico" color="#222">
+
+<link rel="stylesheet" href="/css/main.css">
+
+
+<link rel="stylesheet" href="/lib/font-awesome/css/font-awesome.min.css">
+
+<script id="hexo-configurations">
+    var NexT = window.NexT || {};
+    var CONFIG = {"hostname":"emmetzc.github.io","root":"/","scheme":"Muse","version":"7.7.2","exturl":false,"sidebar":{"position":"right","display":"hide","offset":12,"onmobile":false,"padding":18},"copycode":{"enable":false,"show_result":false,"style":null},"back2top":{"enable":true,"sidebar":false,"scrollpercent":false},"bookmark":{"enable":false,"color":"#222","save":"auto"},"fancybox":false,"mediumzoom":false,"lazyload":false,"pangu":false,"comments":{"style":"tabs","active":null,"storage":true,"lazyload":false,"nav":null},"algolia":{"hits":{"per_page":10},"labels":{"input_placeholder":"Search for Posts","hits_empty":"We didn't find any results for the search: ${query}","hits_stats":"${hits} results found in ${time} ms"}},"localsearch":{"enable":false,"trigger":"auto","top_n_per_article":1,"unescape":false,"preload":false},"motion":{"enable":true,"async":false,"transition":{"post_block":"fadeIn","post_header":"slideDownIn","post_body":"slideDownIn","coll_header":"slideLeftIn","sidebar":"slideUpIn"}}};
+  </script>
+
+  <meta name="description" content="毕业设计工作涉及到内存空间分布，需要知道 Linux x86 中栈是从何处开始生长的。可能是之前关键词不对，一直没有搜索到 Linux 内核中的相关信息。今天智商上线用「ASLR Implementation」在 Google 上搜了下，找到了一个远古时期（2.6.12内核）的实现介绍文章。虽然里面的知识有些已经过时了，但是！随机生成 StackTop 的函数名这么多年依旧没有变，所以我成功地检索">
+<meta property="og:type" content="article">
+<meta property="og:title" content="ASLR(Address Space Layout Randomization) - StackTop">
+<meta property="og:url" content="https://emmetzc.github.io/2016/11/22/ASLR-StackTop/index.html">
+<meta property="og:site_name" content="Emmet&#39;s Notes">
+<meta property="og:description" content="毕业设计工作涉及到内存空间分布，需要知道 Linux x86 中栈是从何处开始生长的。可能是之前关键词不对，一直没有搜索到 Linux 内核中的相关信息。今天智商上线用「ASLR Implementation」在 Google 上搜了下，找到了一个远古时期（2.6.12内核）的实现介绍文章。虽然里面的知识有些已经过时了，但是！随机生成 StackTop 的函数名这么多年依旧没有变，所以我成功地检索">
+<meta property="og:locale" content="zh_CN">
+<meta property="article:published_time" content="2016-11-22T11:06:26.000Z">
+<meta property="article:modified_time" content="2020-03-08T03:51:11.697Z">
+<meta property="article:author" content="Emmet Jang">
+<meta property="article:tag" content="Linux Kernel">
+<meta property="article:tag" content="Thesis">
+<meta name="twitter:card" content="summary">
+
+<link rel="canonical" href="https://emmetzc.github.io/2016/11/22/ASLR-StackTop/">
+
+
+<script id="page-configurations">
+  // https://hexo.io/docs/variables.html
+  CONFIG.page = {
+    sidebar: "",
+    isHome : false,
+    isPost : true
+  };
+</script>
+
+  <title>ASLR(Address Space Layout Randomization) - StackTop | Emmet's Notes</title>
+  
+
+
+
+
+
+
+  <noscript>
+  <style>
+  .use-motion .brand,
+  .use-motion .menu-item,
+  .sidebar-inner,
+  .use-motion .post-block,
+  .use-motion .pagination,
+  .use-motion .comments,
+  .use-motion .post-header,
+  .use-motion .post-body,
+  .use-motion .collection-header { opacity: initial; }
+
+  .use-motion .site-title,
+  .use-motion .site-subtitle {
+    opacity: initial;
+    top: initial;
+  }
+
+  .use-motion .logo-line-before i { left: initial; }
+  .use-motion .logo-line-after i { right: initial; }
+  </style>
+</noscript>
+
+</head>
+
+<body itemscope itemtype="http://schema.org/WebPage">
+  <div class="container use-motion">
+    <div class="headband"></div>
+
+    <header class="header" itemscope itemtype="http://schema.org/WPHeader">
+      <div class="header-inner"><div class="site-brand-container">
+  <div class="site-nav-toggle">
+    <div class="toggle" aria-label="切换导航栏">
+      <span class="toggle-line toggle-line-first"></span>
+      <span class="toggle-line toggle-line-middle"></span>
+      <span class="toggle-line toggle-line-last"></span>
+    </div>
+  </div>
+
+  <div class="site-meta">
+
+    <div>
+      <a href="/" class="brand" rel="start">
+        <span class="logo-line-before"><i></i></span>
+        <span class="site-title">Emmet's Notes</span>
+        <span class="logo-line-after"><i></i></span>
+      </a>
+    </div>
+        <p class="site-subtitle">尽人事，听天命</p>
+  </div>
+
+  <div class="site-nav-right">
+    <div class="toggle popup-trigger">
+    </div>
+  </div>
+</div>
+
+
+<nav class="site-nav">
+  
+  <ul id="menu" class="menu">
+        <li class="menu-item menu-item-home">
+
+    <a href="/" rel="section"><i class="fa fa-fw fa-home"></i>首页</a>
+
+  </li>
+        <li class="menu-item menu-item-archives">
+
+    <a href="/archives/" rel="section"><i class="fa fa-fw fa-archive"></i>归档</a>
+
+  </li>
+        <li class="menu-item menu-item-categories">
+
+    <a href="/categories/" rel="section"><i class="fa fa-fw fa-th"></i>分类</a>
+
+  </li>
+        <li class="menu-item menu-item-tags">
+
+    <a href="/tags/" rel="section"><i class="fa fa-fw fa-tags"></i>标签</a>
+
+  </li>
+        <li class="menu-item menu-item-about">
+
+    <a href="/about/" rel="section"><i class="fa fa-fw fa-user"></i>关于</a>
+
+  </li>
+  </ul>
+
+</nav>
+</div>
+    </header>
+
+    
+  <div class="back-to-top">
+    <i class="fa fa-arrow-up"></i>
+    <span>0%</span>
+  </div>
+
+
+    <main class="main">
+      <div class="main-inner">
+        <div class="content-wrap">
+          
+
+          <div class="content">
+            
+
+  <div class="posts-expand">
+      
+  
+  
+  <article itemscope itemtype="http://schema.org/Article" class="post-block " lang="zh-CN">
+    <link itemprop="mainEntityOfPage" href="https://emmetzc.github.io/2016/11/22/ASLR-StackTop/">
+
+    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
+      <meta itemprop="image" content="/uploads/Emmet.jpg">
+      <meta itemprop="name" content="Emmet Jang">
+      <meta itemprop="description" content="">
+    </span>
+
+    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
+      <meta itemprop="name" content="Emmet's Notes">
+    </span>
+      <header class="post-header">
+        <h1 class="post-title" itemprop="name headline">
+          ASLR(Address Space Layout Randomization) - StackTop
+        </h1>
+
+        <div class="post-meta">
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="fa fa-calendar-o"></i>
+              </span>
+              <span class="post-meta-item-text">发表于</span>
+
+              <time title="创建时间：2016-11-22 19:06:26" itemprop="dateCreated datePublished" datetime="2016-11-22T19:06:26+08:00">2016-11-22</time>
+            </span>
+            <span class="post-meta-item">
+              <span class="post-meta-item-icon">
+                <i class="fa fa-folder-o"></i>
+              </span>
+              <span class="post-meta-item-text">分类于</span>
+                <span itemprop="about" itemscope itemtype="http://schema.org/Thing">
+                  <a href="/categories/Computer-Science/" itemprop="url" rel="index"><span itemprop="name">Computer Science</span></a>
+                </span>
+            </span>
+
+          
+            <span id="/2016/11/22/ASLR-StackTop/" class="post-meta-item leancloud_visitors" data-flag-title="ASLR(Address Space Layout Randomization) - StackTop" title="阅读次数">
+              <span class="post-meta-item-icon">
+                <i class="fa fa-eye"></i>
+              </span>
+              <span class="post-meta-item-text">阅读次数：</span>
+              <span class="leancloud-visitors-count"></span>
+            </span>
+
+        </div>
+      </header>
+
+    
+    
+    
+    <div class="post-body" itemprop="articleBody">
+
+      
+        <p>毕业设计工作涉及到内存空间分布，需要知道 Linux x86 中栈是从何处开始生长的。可能是之前关键词不对，一直没有搜索到 Linux 内核中的相关信息。今天智商上线用「ASLR Implementation」在 Google 上搜了下，找到了一个远古时期（2.6.12内核）的实现介绍文章。虽然里面的知识有些已经过时了，但是！随机生成 StackTop 的函数名这么多年依旧没有变，所以我成功地检索到了随机生成栈顶地址的函数。</p>
+<p>以3.19版内核代码为例。<a id="more"></a></p>
+<h3 id="StackTop-随机函数"><a href="#StackTop-随机函数" class="headerlink" title="StackTop 随机函数"></a>StackTop 随机函数</h3><p>随机生成 StackTop 的函数为 <a href="http://lxr.free-electrons.com/source/fs/binfmt_elf.c?v=3.19#L646" target="_blank" rel="noopener"><code>randomize_stack_top</code></a>，文件目录<a href="http://lxr.free-electrons.com/source/?v=3.19" target="_blank" rel="noopener">Linux</a>/<a href="http://lxr.free-electrons.com/source/fs/?v=3.19" target="_blank" rel="noopener">fs</a>/<a href="http://lxr.free-electrons.com/source/fs/binfmt_elf.c?v=3.19" target="_blank" rel="noopener">binfmt_elf.c</a>，函数内容如下：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">unsigned</span> <span class="keyword">long</span> <span class="title">randomize_stack_top</span><span class="params">(<span class="keyword">unsigned</span> <span class="keyword">long</span> stack_top)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">	<span class="keyword">unsigned</span> <span class="keyword">int</span> random_variable = <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> ((current-&gt;flags &amp; PF_RANDOMIZE) &amp;&amp;</span><br><span class="line">		!(current-&gt;personality &amp; ADDR_NO_RANDOMIZE)) &#123;</span><br><span class="line">		random_variable = get_random_int() &amp; STACK_RND_MASK;</span><br><span class="line">		random_variable &lt;&lt;= PAGE_SHIFT;</span><br><span class="line">	&#125;</span><br><span class="line"><span class="meta">#<span class="meta-keyword">ifdef</span> CONFIG_STACK_GROWSUP</span></span><br><span class="line">	<span class="keyword">return</span> PAGE_ALIGN(stack_top) + random_variable;</span><br><span class="line"><span class="meta">#<span class="meta-keyword">else</span></span></span><br><span class="line">	<span class="keyword">return</span> PAGE_ALIGN(stack_top) - random_variable;</span><br><span class="line"><span class="meta">#<span class="meta-keyword">endif</span></span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>该函数基于输入 <code>stack_top</code>，在其周围一定范围内随机生成一个新的地址作为真正的 StackTop。随机范围由 <code>STACK_RND_MASK</code> 给出，其定义为：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="meta-keyword">define</span> STACK_RND_MASK (0x7ff &gt;&gt; (PAGE_SHIFT - 12))</span></span><br></pre></td></tr></table></figure>
+
+<p>由于 x86 下内存页面的大小就是 4KB，因此 <code>PAGE_SHIFT</code> 即页面的位数12，故而这里 <code>STACK_RND_MASK</code> 的值就是 <code>0x7ff</code>，也就是 2047。因此 StackTop 的随机范围为最大偏移 2047 个页面。</p>
+<p>注意到 <code>STACK_RND_MASK</code> 会影响偏移的正负性，该值表示栈向高处增长。一般情况下栈都是自顶向下增长，但也有部分架构是自底向上增长。x86 的栈是自顶向下增长的，因此随机偏移时只能向下偏移。</p>
+<h3 id="StackTop-基地址"><a href="#StackTop-基地址" class="headerlink" title="StackTop 基地址"></a>StackTop 基地址</h3><p>知道 StackTop 的生成方法后，需要知道输入的基地址是如何选择的。正好该函数的调用方也在同一个文件里 <a href="http://lxr.free-electrons.com/source/fs/binfmt_elf.c?v=3.19#L851" target="_blank" rel="noopener">binfmt_elf.c#L851</a>：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">retval = setup_arg_pages(bprm, randomize_stack_top(STACK_TOP), executable_stack);</span><br></pre></td></tr></table></figure>
+
+<p><code>STACK_TOP</code> 的定义见 <a href="http://lxr.free-electrons.com/source/?v=3.19" target="_blank" rel="noopener">Linux</a>/<a href="http://lxr.free-electrons.com/source/arch/?v=3.19" target="_blank" rel="noopener">arch</a>/<a href="http://lxr.free-electrons.com/source/arch/x86/?v=3.19" target="_blank" rel="noopener">x86</a>/<a href="http://lxr.free-electrons.com/source/arch/x86/include/?v=3.19" target="_blank" rel="noopener">include</a>/<a href="http://lxr.free-electrons.com/source/arch/x86/include/asm/?v=3.19" target="_blank" rel="noopener">asm</a>/<a href="http://lxr.free-electrons.com/source/arch/x86/include/asm/processor.h?v=3.19" target="_blank" rel="noopener">processor.h</a>，分为 32 位与64位两个版本：</p>
+<h4 id="32-位"><a href="#32-位" class="headerlink" title="32 位"></a>32 位</h4><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="meta-keyword">define</span> TASK_SIZE				PAGE_OFFSET</span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> TASK_SIZE_MAX			TASK_SIZE</span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> STACK_TOP				TASK_SIZE</span></span><br></pre></td></tr></table></figure>
+
+<p>32位的 <code>PAGE_OFFSET</code> 由 <a href="http://lxr.free-electrons.com/source/?v=3.19" target="_blank" rel="noopener">Linux</a>/<a href="http://lxr.free-electrons.com/source/arch/?v=3.19" target="_blank" rel="noopener">arch</a>/<a href="http://lxr.free-electrons.com/source/arch/x86/?v=3.19" target="_blank" rel="noopener">x86</a>/<a href="http://lxr.free-electrons.com/source/arch/x86/include/?v=3.19" target="_blank" rel="noopener">include</a>/<a href="http://lxr.free-electrons.com/source/arch/x86/include/asm/?v=3.19" target="_blank" rel="noopener">asm</a>/<a href="http://lxr.free-electrons.com/source/arch/x86/include/asm/page_32_types.h?v=3.19" target="_blank" rel="noopener">page_32_types.h </a>中的 <code>__PAGE_OFFSET</code> 给出:</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="meta-keyword">define</span> __PAGE_OFFSET			_AC(CONFIG_PAGE_OFFSET, UL)</span></span><br></pre></td></tr></table></figure>
+
+<p><code>CONFIG_PAGE_OFFSET</code> 可以在编译内核时进行配置，默认值为我们熟知的 <code>0xC0000000</code>，它表示在虚拟地址空间中内核控件的映射起始地址。也就是说在默认情况下，32位中以 <code>0xC0000000</code> 为基地址随机生成栈顶地址 。</p>
+<h4 id="64-位"><a href="#64-位" class="headerlink" title="64 位"></a>64 位</h4><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="meta-keyword">define</span> __PAGE_OFFSET			_AC(CONFIG_PAGE_OFFSET, UL)</span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> IA32_PAGE_OFFSET		((current-&gt;personality &amp; ADDR_LIMIT_3GB) ? 0xc0000000 : 0xFFFFe000)</span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> TASK_SIZE				(test_thread_flag(TIF_ADDR32) ? IA32_PAGE_OFFSET : TASK_SIZE_MAX)</span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> STACK_TOP				TASK_SIZE</span></span><br></pre></td></tr></table></figure>
+
+<p><code>TIF_ADDR32</code> 的定义在 <a href="http://lxr.free-electrons.com/source/?v=3.19" target="_blank" rel="noopener">Linux</a>/<a href="http://lxr.free-electrons.com/source/arch/?v=3.19" target="_blank" rel="noopener">arch</a>/<a href="http://lxr.free-electrons.com/source/arch/x86/?v=3.19" target="_blank" rel="noopener">x86</a>/<a href="http://lxr.free-electrons.com/source/arch/x86/include/?v=3.19" target="_blank" rel="noopener">include</a>/<a href="http://lxr.free-electrons.com/source/arch/x86/include/asm/?v=3.19" target="_blank" rel="noopener">asm</a>/<a href="http://lxr.free-electrons.com/source/arch/x86/include/asm/thread_info.h?v=3.19" target="_blank" rel="noopener">thread_info.h</a> 中，其表示64位机上使用32位地址空间。当使用32位空间时，StackTop 基地址为 <code>IA32_PAGE_OFFSET</code>，否则基地址则是 <code>128T - 4K</code>，即 <code>0x7ffffffff000</code>。</p>
+<p><code>IA32_PAGE_OFFSET</code> 用于表示 <code>mmap</code> 函数在寻找虚拟内存地址时的偏移地址，<code>ADDR_LIMIT_3GB</code> 即为对应配置项。</p>
+<h3 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h3><p>默认情况下，StackTop 的随机取值范围为:</p>
+<ol>
+<li>x86_32: <code>[0xBF801000, 0xC0000000]</code>;</li>
+<li>x86_64: <code>[0x7FFFFF800000, 0x7ffffffff000]</code>.</li>
+</ol>
+
+    </div>
+
+    
+    
+    
+
+      <footer class="post-footer">
+          
+          <div class="post-tags">
+              <a href="/tags/Linux-Kernel/" rel="tag"><i class="fa fa-tag"></i> Linux Kernel</a>
+              <a href="/tags/Thesis/" rel="tag"><i class="fa fa-tag"></i> Thesis</a>
+          </div>
+
+        
+
+
+        
+    <div class="post-nav">
+      <div class="post-nav-item">
+    <a href="/2016/11/01/C-C-Notes/" rel="prev" title="C/C++ Notes">
+      <i class="fa fa-chevron-left"></i> C/C++ Notes
+    </a></div>
+      <div class="post-nav-item">
+    <a href="/2017/08/05/Phone-Numer/" rel="next" title="我的新手机号">
+      我的新手机号 <i class="fa fa-chevron-right"></i>
+    </a></div>
+    </div>
+      </footer>
+    
+  </article>
+  
+  
+  
+
+  </div>
+
+
+          </div>
+          
+
+<script>
+  window.addEventListener('tabs:register', () => {
+    let { activeClass } = CONFIG.comments;
+    if (CONFIG.comments.storage) {
+      activeClass = localStorage.getItem('comments_active') || activeClass;
+    }
+    if (activeClass) {
+      let activeTab = document.querySelector(`a[href="#comment-${activeClass}"]`);
+      if (activeTab) {
+        activeTab.click();
+      }
+    }
+  });
+  if (CONFIG.comments.storage) {
+    window.addEventListener('tabs:click', event => {
+      if (!event.target.matches('.tabs-comment .tab-content .tab-pane')) return;
+      let commentClass = event.target.classList[1];
+      localStorage.setItem('comments_active', commentClass);
+    });
+  }
+</script>
+
+        </div>
+          
+  
+  <div class="toggle sidebar-toggle">
+    <span class="toggle-line toggle-line-first"></span>
+    <span class="toggle-line toggle-line-middle"></span>
+    <span class="toggle-line toggle-line-last"></span>
+  </div>
+
+  <aside class="sidebar">
+    <div class="sidebar-inner">
+
+      <ul class="sidebar-nav motion-element">
+        <li class="sidebar-nav-toc">
+          文章目录
+        </li>
+        <li class="sidebar-nav-overview">
+          站点概览
+        </li>
+      </ul>
+
+      <!--noindex-->
+      <div class="post-toc-wrap sidebar-panel">
+          <div class="post-toc motion-element"><ol class="nav"><li class="nav-item nav-level-3"><a class="nav-link" href="#StackTop-随机函数"><span class="nav-number">1.</span> <span class="nav-text">StackTop 随机函数</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#StackTop-基地址"><span class="nav-number">2.</span> <span class="nav-text">StackTop 基地址</span></a><ol class="nav-child"><li class="nav-item nav-level-4"><a class="nav-link" href="#32-位"><span class="nav-number">2.1.</span> <span class="nav-text">32 位</span></a></li><li class="nav-item nav-level-4"><a class="nav-link" href="#64-位"><span class="nav-number">2.2.</span> <span class="nav-text">64 位</span></a></li></ol></li><li class="nav-item nav-level-3"><a class="nav-link" href="#总结"><span class="nav-number">3.</span> <span class="nav-text">总结</span></a></li></ol></div>
+      </div>
+      <!--/noindex-->
+
+      <div class="site-overview-wrap sidebar-panel">
+        <div class="site-author motion-element" itemprop="author" itemscope itemtype="http://schema.org/Person">
+    <img class="site-author-image" itemprop="image" alt="Emmet Jang"
+      src="/uploads/Emmet.jpg">
+  <p class="site-author-name" itemprop="name">Emmet Jang</p>
+  <div class="site-description" itemprop="description"></div>
+</div>
+<div class="site-state-wrap motion-element">
+  <nav class="site-state">
+      <div class="site-state-item site-state-posts">
+          <a href="/archives/">
+        
+          <span class="site-state-item-count">13</span>
+          <span class="site-state-item-name">日志</span>
+        </a>
+      </div>
+      <div class="site-state-item site-state-categories">
+            <a href="/categories/">
+          
+        <span class="site-state-item-count">3</span>
+        <span class="site-state-item-name">分类</span></a>
+      </div>
+      <div class="site-state-item site-state-tags">
+            <a href="/tags/">
+          
+        <span class="site-state-item-count">12</span>
+        <span class="site-state-item-name">标签</span></a>
+      </div>
+  </nav>
+</div>
+  <div class="links-of-author motion-element">
+      <span class="links-of-author-item">
+        <a href="https://github.com/EmmetZC" title="GitHub → https://github.com/EmmetZC" rel="noopener" target="_blank"><i class="fa fa-fw fa-github"></i>GitHub</a>
+      </span>
+      <span class="links-of-author-item">
+        <a href="http://weibo.com/u/2654631933" title="Weibo → http://weibo.com/u/2654631933" rel="noopener" target="_blank"><i class="fa fa-fw fa-weibo"></i>Weibo</a>
+      </span>
+  </div>
+
+
+
+      </div>
+
+    </div>
+  </aside>
+  <div id="sidebar-dimmer"></div>
+
+
+      </div>
+    </main>
+
+    <footer class="footer">
+      <div class="footer-inner">
+        
+
+<div class="copyright">
+  
+  &copy; 
+  <span itemprop="copyrightYear">2020</span>
+  <span class="with-love">
+    <i class="fa fa-heart"></i>
+  </span>
+  <span class="author" itemprop="copyrightHolder">Emmet Jang</span>
+</div>
+  <div class="powered-by">由 <a href="https://hexo.io" class="theme-link" rel="noopener" target="_blank">Hexo</a> 强力驱动
+  </div>
+  <span class="post-meta-divider">|</span>
+  <div class="theme-info">主题 – <a href="https://muse.theme-next.org" class="theme-link" rel="noopener" target="_blank">NexT.Muse</a>
+  </div>
+
+        
+
+
+
+
+
+
+  <script>
+  function leancloudSelector(url) {
+    url = encodeURI(url);
+    return document.getElementById(url).querySelector('.leancloud-visitors-count');
+  }
+  if (CONFIG.page.isPost) {
+    function addCount(Counter) {
+      var visitors = document.querySelector('.leancloud_visitors');
+      var url = decodeURI(visitors.getAttribute('id'));
+      var title = visitors.dataset.flagTitle;
+
+      Counter('get', `/classes/Counter?where=${JSON.stringify({ url })}`)
+        .then(response => response.json())
+        .then(({ results }) => {
+          if (results.length > 0) {
+            var counter = results[0];
+            Counter('put', '/classes/Counter/' + counter.objectId, { time: { '__op': 'Increment', 'amount': 1 } })
+              .then(response => response.json())
+              .then(() => {
+                leancloudSelector(url).innerText = counter.time + 1;
+              })
+              .catch(error => {
+                console.error('Failed to save visitor count', error);
+              })
+          } else {
+              leancloudSelector(url).innerText = 'Counter not initialized! More info at console err msg.';
+              console.error('ATTENTION! LeanCloud counter has security bug, see how to solve it here: https://github.com/theme-next/hexo-leancloud-counter-security. \n However, you can still use LeanCloud without security, by setting `security` option to `false`.');
+            
+          }
+        })
+        .catch(error => {
+          console.error('LeanCloud Counter Error', error);
+        });
+    }
+  } else {
+    function showTime(Counter) {
+      var visitors = document.querySelectorAll('.leancloud_visitors');
+      var entries = [...visitors].map(element => {
+        return decodeURI(element.getAttribute('id'));
+      });
+
+      Counter('get', `/classes/Counter?where=${JSON.stringify({ url: { '$in': entries } })}`)
+        .then(response => response.json())
+        .then(({ results }) => {
+          if (results.length === 0) {
+            document.querySelectorAll('.leancloud_visitors .leancloud-visitors-count').forEach(element => {
+              element.innerText = 0;
+            });
+            return;
+          }
+          for (let item of results) {
+            let { url, time } = item;
+            leancloudSelector(url).innerText = time;
+          }
+          for (let url of entries) {
+            var element = leancloudSelector(url);
+            if (element.innerText == '') {
+              element.innerText = 0;
+            }
+          }
+        })
+        .catch(error => {
+          console.error('LeanCloud Counter Error', error);
+        });
+    }
+  }
+
+  fetch('https://app-router.leancloud.cn/2/route?appId=E2NQBz5aPUf7acBS33MMvqAS-gzGzoHsz')
+    .then(response => response.json())
+    .then(({ api_server }) => {
+      var Counter = (method, url, data) => {
+        return fetch(`https://${api_server}/1.1${url}`, {
+          method,
+          headers: {
+            'X-LC-Id'     : 'E2NQBz5aPUf7acBS33MMvqAS-gzGzoHsz',
+            'X-LC-Key'    : 'U9Mg3irlq24dNXbeWNjGkKhU',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(data)
+        });
+      };
+      if (CONFIG.page.isPost) {
+        if (CONFIG.hostname !== location.hostname) return;
+        addCount(Counter);
+      } else if (document.querySelectorAll('.post-title-link').length >= 1) {
+        showTime(Counter);
+      }
+    });
+  </script>
+
+
+      </div>
+    </footer>
+  </div>
+
+  
+  <script src="/lib/anime.min.js"></script>
+  <script src="/lib/velocity/velocity.min.js"></script>
+  <script src="/lib/velocity/velocity.ui.min.js"></script>
+
+<script src="/js/utils.js"></script>
+
+<script src="/js/motion.js"></script>
+
+
+<script src="/js/schemes/muse.js"></script>
+
+
+<script src="/js/next-boot.js"></script>
+
+
+
+
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+  
+
+</body>
+</html>
